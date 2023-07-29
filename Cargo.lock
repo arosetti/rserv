@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "hyper",
  "hyper-staticfile",
+ "log",
  "pretty_env_logger",
  "tokio",
 ]
