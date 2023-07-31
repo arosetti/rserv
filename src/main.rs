@@ -13,8 +13,37 @@ extern crate pretty_env_logger;
 extern crate log;
 
 async fn handle_request<B>(req: Request<B>, dir: String) -> Result<Response<Body>, std::io::Error> {
-    let static_ = Static::new(Path::new(dir.as_str()));
-    static_.serve(req).await
+    let path = Path::new(&dir);
+    let requested_path = req.uri().path();
+    info!("Serving \"{requested_path}\"");
+    let full_path = path.join(requested_path.trim_start_matches('/'));
+    if full_path.is_dir() {
+        directory_to_html_response(full_path).await
+    } else {
+        Static::new(path).serve(req).await
+    }
+}
+
+async fn directory_to_html_response(
+    path: std::path::PathBuf,
+) -> Result<Response<Body>, std::io::Error> {
+    let mut html = String::new();
+    html.push_str("<pre>");
+    if let Ok(mut entries) = tokio::fs::read_dir(&path).await {
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            if let Some(file_name) = entry.file_name().to_str() {
+                let file_path = path.join(file_name);
+                let link = format!("<a href=\"{}\">{}</a>\n", file_path.display(), file_name);
+                html.push_str(&link);
+            }
+        }
+    }
+    html.push_str("</pre>");
+    let response = Response::builder()
+        .header("Content-Type", "text/html")
+        .body(Body::from(html))
+        .unwrap();
+    Ok(response)
 }
 
 #[tokio::main]
@@ -29,18 +58,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(&"127.0.0.1:8081".to_string())
         .to_string();
     let addr: SocketAddr = addr.parse().expect("Invalid address format");
-    info!("Listening on http://{}", &addr);
+    info!("Listening on http://{addr}");
     let dir = args.get(2).unwrap_or(&".".to_string()).to_string();
-    info!("Serving \"{}\"", dir);
+    info!("Hosting: \"{dir}\"");
 
     let make_svc = make_service_fn(move |_conn| {
         let dir = dir.clone();
         async { Ok::<_, Infallible>(service_fn(move |req| handle_request(req, dir.clone()))) }
     });
 
-    let server = Server::bind(&addr).serve(make_svc);
-    if let Err(e) = server.await {
-        error!("Server error: {}", e);
+    if let Err(e) = Server::bind(&addr).serve(make_svc).await {
+        error!("Server error: {e}");
     }
     Ok(())
 }
